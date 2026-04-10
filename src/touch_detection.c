@@ -123,8 +123,9 @@ void touch_end_timeout_callback(struct k_work *work) {
     
     data->touching = false;
 /* [추가] 오토 레이어 비활성화: 손을 떼고 일정 시간(wait-for-new-position-ms)이 지나면 레이어를 끕니다. */
-    if (config->tap_detection.touch_layer >= 0) {
+    if (data->touch_detection.auto_layer_active) {
         zmk_keymap_layer_deactivate((uint8_t)config->tap_detection.touch_layer);
+        data->touch_detection.auto_layer_active = false; // 플래그 초기화 필수
     }
 /*오토레이어*/  
     data->complete = true;

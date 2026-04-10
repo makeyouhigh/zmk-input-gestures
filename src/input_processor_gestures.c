@@ -87,6 +87,8 @@ static const struct zmk_input_processor_driver_api gestures_driver_api = {
         .tap_drag_window_ms = DT_INST_PROP(n, tap_drag_window_ms),                                          \
         .right_click_layer = DT_INST_PROP(n, tap_right_click_layer),                                        \
         .touch_layer = DT_INST_PROP_OR(n, touch_layer, -1),                                                 \
+        .ignore_layers = DT_INST_PROP_OR(n, ignore_layers, {0}),                                            \
+        .ignore_layers_len = DT_INST_PROP_LEN_OR(n, ignore_layers, 0),                                      \
     };                                                                                                      \
     static const struct touch_detection_config touch_detection_config_##n = {                               \
         .wait_for_new_position_ms = DT_INST_PROP(n, wait_for_new_position_ms),                              \

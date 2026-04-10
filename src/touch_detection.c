@@ -87,7 +87,20 @@ int touch_detection_handle_event(const struct device *dev, struct input_event *e
 
 /* [추가] 오토 레이어 활성화: 손을 대는 순간 dtsi에서 설정한 레이어를 켭니다. */
         if (config->tap_detection.touch_layer >= 0) {
-            zmk_keymap_layer_activate((uint8_t)config->tap_detection.touch_layer);
+            bool scroller_active = false;
+            
+            // dtsi에서 ignore-layers로 넘겨준 1번, 5번 등을 체크
+            for (int i = 0; i < config->tap_detection.ignore_layers_len; i++) {
+                if (zmk_keymap_layer_active((uint8_t)config->tap_detection.ignore_layers[i])) {
+                    scroller_active = true; // "아, 지금 스크롤 모드구나!"
+                    break;
+                }
+            }
+            // 스크롤 모드가 아닐 때만 3번 레이어를 활성화
+            if (!scroller_active) {
+                zmk_keymap_layer_activate((uint8_t)config->tap_detection.touch_layer);
+                data->touch_detection.auto_layer_active = true;
+            }
         }
 /*오토레이어*/
       

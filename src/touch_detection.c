@@ -42,7 +42,11 @@ int touch_detection_handle_event(const struct device *dev, struct input_event *e
 
     if (! data->touch_detection.complete) {
         data->touch_detection.previous_event = event;
-
+    // [추가] 탭 디텍션이 동작 중이고 이동 억제가 켜져 있다면, 첫 번째 이벤트(X)도 여기서 0으로 만듭니다.
+        if (data->tap_detection.is_waiting_for_tap && config->tap_detection.prevent_movement_during_tap) {
+            event->type = INPUT_EV_REL;
+            event->value = 0;
+        }
         // When circular scroll is tracking, suppress cursor movement for
         // the first event of each pair.  Convert it to a zero-delta
         // relative event so downstream processors don't move the cursor.

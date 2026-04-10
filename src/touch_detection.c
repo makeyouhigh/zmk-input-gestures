@@ -20,9 +20,6 @@ int touch_detection_handle_event(const struct device *dev, struct input_event *e
                      event->code == INPUT_ABS_Y || event->code == INPUT_REL_Y);
 
     if (!is_coord) {
-        if (data->tap_detection.is_waiting_for_tap && config->tap_detection.prevent_movement_during_tap) {
-            return ZMK_INPUT_PROC_STOP;
-        }
         return ZMK_INPUT_PROC_CONTINUE;
     }
   
@@ -96,8 +93,8 @@ int touch_detection_handle_event(const struct device *dev, struct input_event *e
 
     /* [추가] 손가락이 10유닛 이상 움직였다면 이건 탭이 아니므로 즉시 이동 허용 */
     if (data->tap_detection.is_waiting_for_tap && 
-       (gesture_event.delta_x > 10 || gesture_event.delta_x < -10 || 
-        gesture_event.delta_y > 10 || gesture_event.delta_y < -10)) {
+       (gesture_event.delta_x > 3 || gesture_event.delta_x < -3 || 
+        gesture_event.delta_y > 3 || gesture_event.delta_y < -3)) {
         data->tap_detection.is_waiting_for_tap = false;
       }
     if (!data->touch_detection.touching){

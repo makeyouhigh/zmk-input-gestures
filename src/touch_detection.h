@@ -17,6 +17,7 @@ struct touch_detection_data {
     bool complete;
     struct input_event *previous_event;
     gesture_data *all;
+    bool auto_layer_active;
 };
 
 struct touch_detection_config {

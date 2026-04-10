@@ -16,6 +16,13 @@ int touch_detection_handle_event(const struct device *dev, struct input_event *e
                                uint32_t param2, struct zmk_input_processor_state *state) {
     struct gesture_config *config = (struct gesture_config *)dev->config;
     struct gesture_data *data = (struct gesture_data *)dev->data;
+    bool is_coord = (event->code == INPUT_ABS_X || event->code == INPUT_REL_X || 
+                     event->code == INPUT_ABS_Y || event->code == INPUT_REL_Y);
+
+    if (!is_coord) {
+        return ZMK_INPUT_PROC_CONTINUE;
+    }
+  
     k_work_reschedule(&data->touch_detection.touch_end_timeout_work, K_MSEC(config->touch_detection.wait_for_new_position_ms));
 
     if (event->type != INPUT_EV_ABS && event->type == INPUT_EV_REL) {
@@ -40,11 +47,7 @@ int touch_detection_handle_event(const struct device *dev, struct input_event *e
     } else if (event->code == INPUT_ABS_Y || event->code == INPUT_REL_Y) {
         data->touch_detection.y = event->value;
     }
-//탭 인식시 흔들림 방지
-    if (data->tap_detection.is_waiting_for_tap && config->tap_detection.prevent_movement_during_tap) {
-        event->value = 0;
-    }
-  
+
     if (! data->touch_detection.complete) {
         data->touch_detection.previous_event = event;
 
@@ -112,6 +115,11 @@ int touch_detection_handle_event(const struct device *dev, struct input_event *e
     data->touch_detection.previous_x = data->touch_detection.x;
     data->touch_detection.previous_y = data->touch_detection.y;
 
+/* [추가] 탭 대기 중일 때 마우스 이동 신호를 차단하여 지터링 방지 */
+    if (data->tap_detection.is_waiting_for_tap && config->tap_detection.prevent_movement_during_tap) {
+        return ZMK_INPUT_PROC_STOP;
+    }
+  
     return ZMK_INPUT_PROC_CONTINUE;
 }
 

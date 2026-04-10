@@ -82,8 +82,10 @@ int touch_detection_handle_event(const struct device *dev, struct input_event *e
         .y = data->touch_detection.y,
         .previous_x = data->touch_detection.previous_x,
         .previous_y = data->touch_detection.previous_y,
-        .delta_x = data->touch_detection.x - data->touch_detection.previous_x,
-        .delta_y = data->touch_detection.y - data->touch_detection.previous_y,
+        /*.delta_x = data->touch_detection.x - data->touch_detection.previous_x,
+        .delta_y = data->touch_detection.y - data->touch_detection.previous_y,*/
+        .delta_x = data->touch_detection.touching ? (data->touch_detection.x - data->touch_detection.previous_x) : 0,
+        .delta_y = data->touch_detection.touching ? (data->touch_detection.y - data->touch_detection.previous_y) : 0,
         .delta_time = now - data->touch_detection.last_touch_timestamp,
         .absolute = data->touch_detection.absolute,
         .raw_event_1 = data->touch_detection.previous_event,
@@ -92,8 +94,15 @@ int touch_detection_handle_event(const struct device *dev, struct input_event *e
 
     data->touch_detection.last_touch_timestamp = now;
 
+    /* [추가] 손가락이 10유닛 이상 움직였다면 이건 탭이 아니므로 즉시 이동 허용 */
+    if (data->tap_detection.is_waiting_for_tap && 
+       (gesture_event.delta_x > 10 || gesture_event.delta_x < -10 || 
+        gesture_event.delta_y > 10 || gesture_event.delta_y < -10)) {
+        data->tap_detection.is_waiting_for_tap = false;
+      }
     if (!data->touch_detection.touching){
         data->touch_detection.touching = true;
+
 
 /* [추가] 오토 레이어 활성화: 손을 대는 순간 dtsi에서 설정한 레이어를 켭니다. */
         if (config->tap_detection.touch_layer >= 0) {

@@ -133,13 +133,13 @@ properties:
       for intense usage, the default value allows reliable tap detection while being quick enough that
       I can't notice it.
 
-   touch-layer:
-     type: int
-     default: -1
-     description: |
-       activate specific layer while touchpad is using(deactivating with -1)
+  touch-layer:
+    type: int
+    default: -1
+    description: |
+      activate specific layer while touchpad is using(deactivating with -1)
 
-   ignore-layers:
-     type: array
-     description: |
-       touch-layer deactivating for xy scroller behaviors
+  ignore-layers:
+    type: array
+    description: |
+      touch-layer deactivating for xy scroller behaviors

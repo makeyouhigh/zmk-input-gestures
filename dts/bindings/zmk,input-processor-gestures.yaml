@@ -138,3 +138,8 @@ properties:
      default: -1
      description: |
        activate specific layer while touchpad is using(deactivating with -1)
+
+   ignore-layers:
+     type: array
+     description: |
+       touch-layer deactivating for xy scroller behaviors

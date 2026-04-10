@@ -41,6 +41,16 @@
      k_work_reschedule(&data->tap_detection.tap_timeout_work, K_MSEC(config->tap_detection.tap_timout_ms));
      data->tap_detection.is_waiting_for_tap = true;
 
+/* tap_detection_handle_start 및 tap_detection_handle_touch 공통 수정 */
+     if (config->tap_detection.prevent_movement_during_tap) {
+         // raw_event_1 (X축) 억제
+         event->raw_event_1->type = INPUT_EV_REL; // 타입을 유지하거나 REL로 명시
+         event->raw_event_1->value = 0;           // 값만 0으로
+         // raw_event_2 (Y축) 억제
+         event->raw_event_2->type = INPUT_EV_REL;
+         event->raw_event_2->value = 0;
+     }
+/* 원래 tap detction 처리 로직
      if (config->tap_detection.prevent_movement_during_tap) {
          event->raw_event_1->code = 0;
          event->raw_event_1->type = 0;
@@ -50,7 +60,7 @@
          event->raw_event_2->type = 0;
          event->raw_event_2->value = 0;
      }
-
+*/
      return 0;
  }
 
@@ -61,7 +71,16 @@
      if (! config->tap_detection.enabled) {
          return -1;
      }
-
+/* tap_detection_handle_start 및 tap_detection_handle_touch 공통 수정 */
+     if (config->tap_detection.prevent_movement_during_tap) {
+         // raw_event_1 (X축) 억제
+         event->raw_event_1->type = INPUT_EV_REL; // 타입을 유지하거나 REL로 명시
+         event->raw_event_1->value = 0;           // 값만 0으로
+         // raw_event_2 (Y축) 억제
+         event->raw_event_2->type = INPUT_EV_REL;
+         event->raw_event_2->value = 0;
+     }
+/* 원래 tap detction 처리 로직
      if (data->tap_detection.is_waiting_for_tap && config->tap_detection.prevent_movement_during_tap) {
          event->raw_event_1->code = 0;
          event->raw_event_1->type = 0;
@@ -71,7 +90,7 @@
          event->raw_event_2->type = 0;
          event->raw_event_2->value = 0;
      }
-
+*/
      return 0;
  }
 

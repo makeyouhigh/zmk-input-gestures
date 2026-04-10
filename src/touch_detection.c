@@ -7,6 +7,7 @@
 #include <drivers/input_processor.h>
 #include <zephyr/logging/log.h>
 #include "input_processor_gestures.h"
+#include <zmk/keymap.h>
 
 LOG_MODULE_DECLARE(gestures, CONFIG_ZMK_LOG_LEVEL);
 
@@ -39,14 +40,14 @@ int touch_detection_handle_event(const struct device *dev, struct input_event *e
     } else if (event->code == INPUT_ABS_Y || event->code == INPUT_REL_Y) {
         data->touch_detection.y = event->value;
     }
-
+//탭 인식시 흔들림 방지
+    if (data->tap_detection.is_waiting_for_tap && config->tap_detection.prevent_movement_during_tap) {
+        event->value = 0;
+    }
+  
     if (! data->touch_detection.complete) {
         data->touch_detection.previous_event = event;
-    // [추가] 탭 디텍션이 동작 중이고 이동 억제가 켜져 있다면, 첫 번째 이벤트(X)도 여기서 0으로 만듭니다.
-        if (data->tap_detection.is_waiting_for_tap && config->tap_detection.prevent_movement_during_tap) {
-            event->type = INPUT_EV_REL;
-            event->value = 0;
-        }
+
         // When circular scroll is tracking, suppress cursor movement for
         // the first event of each pair.  Convert it to a zero-delta
         // relative event so downstream processors don't move the cursor.
@@ -83,6 +84,13 @@ int touch_detection_handle_event(const struct device *dev, struct input_event *e
 
     if (!data->touch_detection.touching){
         data->touch_detection.touching = true;
+
+/* [추가] 오토 레이어 활성화: 손을 대는 순간 dtsi에서 설정한 레이어를 켭니다. */
+        if (config->tap_detection.touch_layer >= 0) {
+            zmk_keymap_layer_activate((uint8_t)config->tap_detection.touch_layer);
+        }
+/*오토레이어*/
+      
         config->handle_touch_start(dev, &gesture_event);
     } else {
         config->handle_touch_continue(dev, &gesture_event);
@@ -101,6 +109,11 @@ void touch_end_timeout_callback(struct k_work *work) {
     struct gesture_config *config = (struct gesture_config *)dev->config;
     
     data->touching = false;
+/* [추가] 오토 레이어 비활성화: 손을 떼고 일정 시간(wait-for-new-position-ms)이 지나면 레이어를 끕니다. */
+    if (config->tap_detection.touch_layer >= 0) {
+        zmk_keymap_layer_deactivate((uint8_t)config->tap_detection.touch_layer);
+    }
+/*오토레이어*/  
     data->complete = true;
     config->handle_touch_end(dev);
 }

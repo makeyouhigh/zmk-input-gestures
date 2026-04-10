@@ -20,6 +20,9 @@ int touch_detection_handle_event(const struct device *dev, struct input_event *e
                      event->code == INPUT_ABS_Y || event->code == INPUT_REL_Y);
 
     if (!is_coord) {
+        if (data->tap_detection.is_waiting_for_tap && config->tap_detection.prevent_movement_during_tap) {
+            return ZMK_INPUT_PROC_STOP;
+        }
         return ZMK_INPUT_PROC_CONTINUE;
     }
   
@@ -68,7 +71,6 @@ int touch_detection_handle_event(const struct device *dev, struct input_event *e
         if (data->tap_detection.is_waiting_for_tap && config->tap_detection.prevent_movement_during_tap) {
             return ZMK_INPUT_PROC_STOP;
         }
-        return ZMK_INPUT_PROC_CONTINUE;
     }
 
     uint32_t now = k_uptime_get();

@@ -25,6 +25,7 @@ struct tap_detection_config {
     const uint8_t tap_timout_ms;
     const uint16_t tap_drag_window_ms;
     const int right_click_layer;
+    const int touch_layer; // auto_layer
 };
 
 handle_init_t tap_detection_init;

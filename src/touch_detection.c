@@ -63,6 +63,11 @@ int touch_detection_handle_event(const struct device *dev, struct input_event *e
             event->type = INPUT_EV_REL;
             event->value = 0;
         }
+
+        /* [추가] 탭 대기 중이면 첫 번째 신호(X)도 여기서 멈춰야 합니다. */
+        if (data->tap_detection.is_waiting_for_tap && config->tap_detection.prevent_movement_during_tap) {
+            return ZMK_INPUT_PROC_STOP;
+        }
         return ZMK_INPUT_PROC_CONTINUE;
     }
 

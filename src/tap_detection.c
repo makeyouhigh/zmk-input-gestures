@@ -1,7 +1,5 @@
 /*
- * Copyright (c) 2025 The ZMK Contributors
- *
- * SPDX-License-Identifier: MIT
+ * tap_detection.c - 통합 수정본
  */
 
 #include <drivers/input_processor.h>
@@ -16,9 +14,9 @@ LOG_MODULE_DECLARE(gestures, CONFIG_ZMK_LOG_LEVEL);
 static uint8_t resolve_tap_button(const struct gesture_config *config) {
     int right_click_layer = config->tap_detection.right_click_layer;
     if (right_click_layer >= 0 && zmk_keymap_layer_active((uint8_t)right_click_layer)) {
-        return 1; /* right click (button 2) */
+        return 1; /* right click */
     }
-    return 0; /* left click (button 1) */
+    return 0; /* left click */
 }
 
 int tap_detection_handle_start(const struct device *dev, struct gesture_event_t *event) {
@@ -29,27 +27,22 @@ int tap_detection_handle_start(const struct device *dev, struct gesture_event_t 
         return -1;
     }
 
-    /* 드래그 모드 진입 확인 */
     if (data->tap_detection.is_in_drag_window) {
         k_work_cancel_delayable(&data->tap_detection.drag_window_work);
         data->tap_detection.is_in_drag_window = false;
         data->tap_detection.is_dragging = true;
-        LOG_DBG("drag started");
         return 0;
     }
 
-    /* 탭 타이머 시작 및 대기 상태 진입 */
+    // 탭 대기 시작
     k_work_reschedule(&data->tap_detection.tap_timeout_work, K_MSEC(config->tap_detection.tap_timout_ms));
     data->tap_detection.is_waiting_for_tap = true;
 
-    /* [기준점 동기화] 터치 시작 직후의 첫 신호 뭉치를 0으로 강제 변조 */
+    // 시작 시점의 이벤트를 0으로 강제 고정
     if (config->tap_detection.prevent_movement_during_tap) {
-        event->raw_event_1->code = 0;
-        event->raw_event_1->type = 0;
+        event->raw_event_1->type = INPUT_EV_REL;
         event->raw_event_1->value = 0;
-
-        event->raw_event_2->code = 0;
-        event->raw_event_2->type = 0;
+        event->raw_event_2->type = INPUT_EV_REL;
         event->raw_event_2->value = 0;
     }
 
@@ -65,27 +58,24 @@ int tap_detection_handle_touch(const struct device *dev, struct gesture_event_t 
     }
 
     if (data->tap_detection.is_waiting_for_tap) {
-        /* * [임계값 기반 탈출] 
-         * 탭 대기 중이라도 일정 거리(10유닛) 이상 움직이면 
-         * 사용자의 의도가 '이동'이라고 판단하여 즉시 탭 모드를 해제합니다.
+        /*
+         * Threshold 판정: Cirque 패드의 해상도를 고려하여 15~20 정도로 설정하십시오.
+         * 너무 낮으면 터치 직후 미세 진동에 탭 모드가 즉시 풀려버립니다.
          */
-        int threshold = 10; 
+        int threshold = 15; 
 
         if (event->delta_x > threshold || event->delta_x < -threshold || 
             event->delta_y > threshold || event->delta_y < -threshold) {
             
+            // 임계값 초과 시 탭 대기 해제 및 타이머 중단
             data->tap_detection.is_waiting_for_tap = false;
             k_work_cancel_delayable(&data->tap_detection.tap_timeout_work);
-            LOG_DBG("Threshold exceeded: switching from tap to move mode");
             
         } else if (config->tap_detection.prevent_movement_during_tap) {
-            /* 임계값 이내의 미세 움직임은 0으로 소거하여 커서 고정 */
-            event->raw_event_1->code = 0;
-            event->raw_event_1->type = 0;
+            // 임계값 이내일 때는 커서 이동을 완벽히 차단
+            event->raw_event_1->type = INPUT_EV_REL;
             event->raw_event_1->value = 0;
-
-            event->raw_event_2->code = 0;
-            event->raw_event_2->type = 0;
+            event->raw_event_2->type = INPUT_EV_REL;
             event->raw_event_2->value = 0;
         }
     }
@@ -95,20 +85,17 @@ int tap_detection_handle_touch(const struct device *dev, struct gesture_event_t 
 
 int tap_detection_handle_end(const struct device *dev) {
     struct gesture_data *data = (struct gesture_data *)dev->data;
-
     if (data->tap_detection.is_dragging) {
         zmk_hid_mouse_button_release(data->tap_detection.tap_button);
         zmk_endpoints_send_mouse_report();
         data->tap_detection.is_dragging = false;
     }
-
     return 0;
 }
 
 static void drag_window_timeout_callback(struct k_work *work) {
     struct k_work_delayable *d_work = k_work_delayable_from_work(work);
     struct tap_detection_data *data = CONTAINER_OF(d_work, struct tap_detection_data, drag_window_work);
-
     if (data->is_in_drag_window) {
         zmk_hid_mouse_button_release(data->tap_button);
         zmk_endpoints_send_mouse_report();
@@ -124,15 +111,13 @@ static void tap_timeout_callback(struct k_work *work) {
     if (!data->all->touch_detection.touching) {
         const struct gesture_config *config = (const struct gesture_config *)data->all->dev->config;
         uint8_t button = resolve_tap_button(config);
-
         zmk_hid_mouse_button_press(button);
         zmk_endpoints_send_mouse_report();
 
         if (config->tap_detection.tap_to_drag) {
             data->tap_button = button;
             data->is_in_drag_window = true;
-            k_work_reschedule(&data->drag_window_work,
-                              K_MSEC(config->tap_detection.tap_drag_window_ms));
+            k_work_reschedule(&data->drag_window_work, K_MSEC(config->tap_detection.tap_drag_window_ms));
         } else {
             zmk_hid_mouse_button_release(button);
             zmk_endpoints_send_mouse_report();
@@ -143,12 +128,8 @@ static void tap_timeout_callback(struct k_work *work) {
 int tap_detection_init(const struct device *dev) {
     struct gesture_config *config = (struct gesture_config *)dev->config;
     struct gesture_data *data = (struct gesture_data *)dev->data;
-
-    if (!config->tap_detection.enabled) {
-        return -1;
-    }
+    if (!config->tap_detection.enabled) { return -1; }
     k_work_init_delayable(&data->tap_detection.tap_timeout_work, tap_timeout_callback);
     k_work_init_delayable(&data->tap_detection.drag_window_work, drag_window_timeout_callback);
-
     return 0;
 }

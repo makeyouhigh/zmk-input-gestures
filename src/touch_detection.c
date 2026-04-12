@@ -15,68 +15,58 @@ int touch_detection_handle_event(const struct device *dev, struct input_event *e
                                uint32_t param2, struct zmk_input_processor_state *state) {
     struct gesture_config *config = (struct gesture_config *)dev->config;
     struct gesture_data *data = (struct gesture_data *)dev->data;
-    
-    // □ [1] 좌표 신호 판별 및 동기화 신호 통과
-    bool is_coord = (event->code == INPUT_ABS_X || event->code == INPUT_REL_X || 
-                     event->code == INPUT_ABS_Y || event->code == INPUT_REL_Y);
-
-    if (!is_coord) {
-        return ZMK_INPUT_PROC_CONTINUE;
-    }
-
     k_work_reschedule(&data->touch_detection.touch_end_timeout_work, K_MSEC(config->touch_detection.wait_for_new_position_ms));
 
-    // □ [2] 원본 데이터 수집 및 보존 (스크롤 엔진을 위해 진짜 좌표를 안전하게 보관)
-    bool is_x = (event->code == INPUT_ABS_X || event->code == INPUT_REL_X);
-    bool original_is_abs = (event->type == INPUT_EV_ABS);
-
-    if (is_x) {
-        data->touch_detection.x = event->value;
-    } else {
-        data->touch_detection.y = event->value;
-    }
-
-    // □ [3] 이동 억제 판별
-    bool should_suppress = (data->tap_detection.is_waiting_for_tap && config->tap_detection.prevent_movement_during_tap) ||
-                           (data->circular_scroll.is_tracking);
-
-    // □ [4] 핵심 변조: ABS 좌표를 직접 REL(상대 이동량)로 변환하여 출력
-    // - 다운스트림 프로세서의 개입을 막아 커서 튐(Jumping)을 물리적으로 차단합니다.
-    if (original_is_abs) {
-        int delta = 0;
-        if (is_x) {
-            delta = data->touch_detection.touching ? (data->touch_detection.x - data->touch_detection.previous_x) : 0;
-            event->code = INPUT_REL_X;
-        } else {
-            delta = data->touch_detection.touching ? (data->touch_detection.y - data->touch_detection.previous_y) : 0;
-            event->code = INPUT_REL_Y;
-        }
-        event->type = INPUT_EV_REL;
-        event->value = should_suppress ? 0 : delta;
-    } else {
-        // 이미 상대 좌표인 경우 억제 시 0으로만 고정
-        if (should_suppress) {
-            event->value = 0;
-        }
+    if (event->type != INPUT_EV_ABS && event->type == INPUT_EV_REL) {
+        return ZMK_INPUT_PROC_CONTINUE;
     }
 
     data->touch_detection.complete = !data->touch_detection.complete;
 
-    // X축만 들어왔으면 Y축을 기다림
-    if (!data->touch_detection.complete) {
+    if (data->touch_detection.complete && data->touch_detection.absolute != (event->type == INPUT_EV_ABS)) {
+        LOG_ERR("Surprising change of absolute/relative type. It's now [%s] but it's supposed to be [%s]. Don't know how to handle that, so ignoring this", 
+            event->type == INPUT_EV_ABS ? "absolute" : "relative",
+            data->touch_detection.absolute ? "absolute" : "relative"
+        );
+        return ZMK_INPUT_PROC_CONTINUE;
+    } else {
+        data->touch_detection.absolute = (event->type == INPUT_EV_ABS);
+    }
+
+    if (event->code == INPUT_ABS_X || event->code == INPUT_REL_X) {
+        data->touch_detection.x = event->value;
+    } else if (event->code == INPUT_ABS_Y || event->code == INPUT_REL_Y) {
+        data->touch_detection.y = event->value;
+    }
+
+    // 억제 조건 판별: 스크롤 중이거나 탭 대기 중일 때
+    bool should_suppress = data->circular_scroll.is_tracking || 
+                           (data->tap_detection.is_waiting_for_tap && config->tap_detection.prevent_movement_during_tap);
+
+    if (! data->touch_detection.complete) {
         data->touch_detection.previous_event = event;
+
+        // 원본의 스크롤 억제 방식을 그대로 사용하여 첫 번째 패킷(X) 변조
+        if (should_suppress) {
+            if (event->code == INPUT_ABS_X || event->code == INPUT_REL_X) {
+                event->code = INPUT_REL_X;
+            } else {
+                event->code = INPUT_REL_Y;
+            }
+            event->type = INPUT_EV_REL;
+            event->value = 0;
+        }
         return ZMK_INPUT_PROC_CONTINUE;
     }
 
-    // □ [5] 제스처 로직 처리 (X, Y 모두 수집 완료)
     uint32_t now = k_uptime_get();
-    
+
+    // 커서 튀기 방지: 새로운 터치 시작 시 기준점을 즉시 동기화
     if (!data->touch_detection.touching) {
         data->touch_detection.previous_x = data->touch_detection.x;
         data->touch_detection.previous_y = data->touch_detection.y;
     }
 
-    // gesture_event에는 위 [2]번에서 보관한 '오염되지 않은 원본 절대 좌표'가 들어갑니다.
     struct gesture_event_t gesture_event = {
         .last_touch_timestamp = now,
         .previous_touch_timestamp = data->touch_detection.last_touch_timestamp,
@@ -84,24 +74,29 @@ int touch_detection_handle_event(const struct device *dev, struct input_event *e
         .y = data->touch_detection.y,
         .previous_x = data->touch_detection.previous_x,
         .previous_y = data->touch_detection.previous_y,
-        .delta_x = data->touch_detection.touching ? (data->touch_detection.x - data->touch_detection.previous_x) : 0,
-        .delta_y = data->touch_detection.touching ? (data->touch_detection.y - data->touch_detection.previous_y) : 0,
+        .delta_x = data->touch_detection.x - data->touch_detection.previous_x,
+        .delta_y = data->touch_detection.y - data->touch_detection.previous_y,
         .delta_time = now - data->touch_detection.last_touch_timestamp,
-        .absolute = original_is_abs,
+        .absolute = data->touch_detection.absolute,
+        .raw_event_1 = data->touch_detection.previous_event,
+        .raw_event_2 = event
     };
 
     data->touch_detection.last_touch_timestamp = now;
 
-    // 움직임 탈출 조건 (10유닛 이상 움직이면 탭 락 해제)
+    // 움직임 탈출: 10유닛 이상 이동 시 탭 고정 해제
     if (data->tap_detection.is_waiting_for_tap && 
        (gesture_event.delta_x > 10 || gesture_event.delta_x < -10 || 
         gesture_event.delta_y > 10 || gesture_event.delta_y < -10)) {
         data->tap_detection.is_waiting_for_tap = false;
+        // 탭 대기가 풀렸으므로 스크롤 상태만으로 억제 조건 재확인
+        should_suppress = data->circular_scroll.is_tracking;
     }
 
     if (!data->touch_detection.touching){
         data->touch_detection.touching = true;
-        // 오토 레이어 로직
+        
+        // 오토 레이어 기능 삽입
         if (config->tap_detection.touch_layer >= 0) {
             bool scroller_active = false;
             for (int i = 0; i < config->tap_detection.ignore_layers_len; i++) {
@@ -116,13 +111,22 @@ int touch_detection_handle_event(const struct device *dev, struct input_event *e
         }
         config->handle_touch_start(dev, &gesture_event);
     } else {
-        // [핵심] 원본 좌표가 살아있으므로 써클 스크롤 엔진이 정상 작동합니다.
         config->handle_touch_continue(dev, &gesture_event);
     }
 
-    // 다음 프레임을 위한 이전 좌표 갱신
     data->touch_detection.previous_x = data->touch_detection.x;
     data->touch_detection.previous_y = data->touch_detection.y;
+
+    // 원본의 스크롤 억제 방식을 두 번째 패킷(Y)에도 적용하여 유출 완전 차단
+    if (should_suppress) {
+        if (event->code == INPUT_ABS_X || event->code == INPUT_REL_X) {
+            event->code = INPUT_REL_X;
+        } else {
+            event->code = INPUT_REL_Y;
+        }
+        event->type = INPUT_EV_REL;
+        event->value = 0;
+    }
 
     return ZMK_INPUT_PROC_CONTINUE;
 }

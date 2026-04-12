@@ -16,24 +16,18 @@ int touch_detection_handle_event(const struct device *dev, struct input_event *e
     struct gesture_config *config = (struct gesture_config *)dev->config;
     struct gesture_data *data = (struct gesture_data *)dev->data;
     
-    // [1] 차단 조건 설정: 탭 대기 중이거나 써클 스크롤 중일 때
-    bool should_suppress = (data->tap_detection.is_waiting_for_tap && config->tap_detection.prevent_movement_during_tap) ||
-                           (data->circular_scroll.is_tracking);
-
-    // [2] 좌표 신호 판별
+    // [1] 좌표 신호 판별 (X, Y 축 신호만 필터링)
     bool is_coord = (event->code == INPUT_ABS_X || event->code == INPUT_REL_X || 
                      event->code == INPUT_ABS_Y || event->code == INPUT_REL_Y);
 
+    // 좌표가 아닌 신호(Sync 등)는 흐름을 깨지 않도록 무조건 통과 (버벅임 방지 핵심)
     if (!is_coord) {
-        // 좌표가 아닌 신호(Sync 등)도 차단 조건이면 여기서 멈춤 (버벅임 방지)
-        return should_suppress ? ZMK_INPUT_PROC_STOP : ZMK_INPUT_PROC_CONTINUE;
-    }
-
-    // [3] 좌표 처리 및 저장
-    if (event->type != INPUT_EV_ABS && event->type == INPUT_EV_REL) {
         return ZMK_INPUT_PROC_CONTINUE;
     }
 
+    k_work_reschedule(&data->touch_detection.touch_end_timeout_work, K_MSEC(config->touch_detection.wait_for_new_position_ms));
+
+    // [2] 좌표 수집 및 타입 체크
     data->touch_detection.complete = !data->touch_detection.complete;
     if (event->code == INPUT_ABS_X || event->code == INPUT_REL_X) {
         data->touch_detection.x = event->value;
@@ -41,17 +35,23 @@ int touch_detection_handle_event(const struct device *dev, struct input_event *e
         data->touch_detection.y = event->value;
     }
 
-    // X축 신호만 온 상태 (반쪽 패킷)
+    // [3] 차단 조건 확인 (탭 대기 중이거나 써클 스크롤 중일 때)
+    bool should_suppress = (data->tap_detection.is_waiting_for_tap && config->tap_detection.prevent_movement_during_tap) ||
+                           (data->circular_scroll.is_tracking);
+
+    // X축만 들어온 반쪽 패킷 처리
     if (! data->touch_detection.complete) {
-        k_work_reschedule(&data->touch_detection.touch_end_timeout_work, K_MSEC(config->touch_detection.wait_for_new_position_ms));
         data->touch_detection.previous_event = event;
-        return should_suppress ? ZMK_INPUT_PROC_STOP : ZMK_INPUT_PROC_CONTINUE;
+        if (should_suppress) {
+            event->type = INPUT_EV_REL; event->value = 0; // 0점으로 속여서 전송
+        }
+        return ZMK_INPUT_PROC_CONTINUE;
     }
 
-    // [4] Y축까지 온 상태 (완전한 패킷)
+    // [4] Y축까지 들어온 완전한 패킷 처리
     uint32_t now = k_uptime_get();
     
-    // 새로운 터치 시작 시 좌표 튀기 방지 초기화
+    // 새로운 터치 시 좌표 동기화 (커서 튀기 방지)
     if (!data->touch_detection.touching) {
         data->touch_detection.previous_x = data->touch_detection.x;
         data->touch_detection.previous_y = data->touch_detection.y;
@@ -74,15 +74,15 @@ int touch_detection_handle_event(const struct device *dev, struct input_event *e
 
     data->touch_detection.last_touch_timestamp = now;
 
-    // [5] 움직임 탈출 조건 (임계값 5)
+    // [5] 움직임 탈출 조건 (Threshold 3)
     if (data->tap_detection.is_waiting_for_tap && 
-       (gesture_event.delta_x > 5 || gesture_event.delta_x < -5 || 
-        gesture_event.delta_y > 5 || gesture_event.delta_y < -5)) {
+       (gesture_event.delta_x > 3 || gesture_event.delta_x < -3 || 
+        gesture_event.delta_y > 3 || gesture_event.delta_y < -3)) {
         data->tap_detection.is_waiting_for_tap = false;
-        should_suppress = data->circular_scroll.is_tracking; // 탭 락만 풀고 스크롤 상태는 유지
+        should_suppress = data->circular_scroll.is_tracking;
     }
 
-    // [6] 오토 레이어 및 제스처 핸들링
+    // [6] 오토 레이어 제어
     if (!data->touch_detection.touching){
         data->touch_detection.touching = true;
         if (config->tap_detection.touch_layer >= 0) {
@@ -105,8 +105,13 @@ int touch_detection_handle_event(const struct device *dev, struct input_event *e
     data->touch_detection.previous_x = data->touch_detection.x;
     data->touch_detection.previous_y = data->touch_detection.y;
 
-    // [7] 최종 차단 결정
-    return should_suppress ? ZMK_INPUT_PROC_STOP : ZMK_INPUT_PROC_CONTINUE;
+    // [7] 최종 빗장: 탭/스크롤 중이면 마우스 이동값만 0으로 변조하여 전송
+    if (should_suppress) {
+        event->type = INPUT_EV_REL;
+        event->value = 0;
+    }
+
+    return ZMK_INPUT_PROC_CONTINUE;
 }
 
 void touch_end_timeout_callback(struct k_work *work) {

@@ -33,18 +33,20 @@ int touch_detection_handle_event(const struct device *dev, struct input_event *e
         data->touch_detection.absolute = (event->type == INPUT_EV_ABS);
     }
 
-
     if (event->code == INPUT_ABS_X || event->code == INPUT_REL_X) {
         data->touch_detection.x = event->value;
     } else if (event->code == INPUT_ABS_Y || event->code == INPUT_REL_Y) {
         data->touch_detection.y = event->value;
     }
 
+    // --- [수정 포인트 1] 억제 조건 통합 ---
+    // 스크롤 중이거나, 터치 감지(탭 대기) 중일 때는 무조건 이동을 막습니다.
+    bool should_suppress = data->circular_scroll.is_tracking || data->tap_detection.is_waiting_for_tap;
+
     if (! data->touch_detection.complete) {
         data->touch_detection.previous_event = event;
 
-        // 원본 로직: 써클 스크롤 중일 때 마우스 커서 이동 억제
-        if (data->circular_scroll.is_tracking) {
+        if (should_suppress) {
             if (event->code == INPUT_ABS_X || event->code == INPUT_REL_X) {
                 event->code = INPUT_REL_X;
             } else {
@@ -58,7 +60,7 @@ int touch_detection_handle_event(const struct device *dev, struct input_event *e
 
     uint32_t now = k_uptime_get();
 
-    // 터치 시작 시 좌표 동기화 (커서 순간이동 방지)
+    // --- [수정 포인트 2] 첫 터치 시 좌표 강제 일치 (순간이동 점프 방지) ---
     if (!data->touch_detection.touching) {
         data->touch_detection.previous_x = data->touch_detection.x;
         data->touch_detection.previous_y = data->touch_detection.y;
@@ -81,17 +83,10 @@ int touch_detection_handle_event(const struct device *dev, struct input_event *e
 
     data->touch_detection.last_touch_timestamp = now;
 
-    // 움직임 감지: 10유닛 이상 이동 시 탭 고정 해제
-    if (data->tap_detection.is_waiting_for_tap && 
-       (gesture_event.delta_x > 10 || gesture_event.delta_x < -10 || 
-        gesture_event.delta_y > 10 || gesture_event.delta_y < -10)) {
-        data->tap_detection.is_waiting_for_tap = false;
-    }
-
     if (!data->touch_detection.touching){
         data->touch_detection.touching = true;
-
-        // 오토 레이어 활성화 로직
+        
+        // --- [수정 포인트 3] 오토 레이어 기능 ---
         if (config->tap_detection.touch_layer >= 0) {
             bool scroller_active = false;
             for (int i = 0; i < config->tap_detection.ignore_layers_len; i++) {
@@ -113,8 +108,7 @@ int touch_detection_handle_event(const struct device *dev, struct input_event *e
     data->touch_detection.previous_x = data->touch_detection.x;
     data->touch_detection.previous_y = data->touch_detection.y;
 
-    // Y축 패킷에 대한 써클 스크롤 억제 동기화 (커서 완전 고정)
-    if (data->circular_scroll.is_tracking) {
+    if (should_suppress) {
         if (event->code == INPUT_ABS_X || event->code == INPUT_REL_X) {
             event->code = INPUT_REL_X;
         } else {
@@ -135,7 +129,6 @@ void touch_end_timeout_callback(struct k_work *work) {
     
     data->touching = false;
     
-    // 오토 레이어 비활성화 로직
     if (data->auto_layer_active) {
         zmk_keymap_layer_deactivate((uint8_t)config->tap_detection.touch_layer);
         data->auto_layer_active = false;

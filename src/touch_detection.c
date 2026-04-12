@@ -16,42 +16,29 @@ int touch_detection_handle_event(const struct device *dev, struct input_event *e
     struct gesture_config *config = (struct gesture_config *)dev->config;
     struct gesture_data *data = (struct gesture_data *)dev->data;
     
-    // □ [1] 좌표 신호 판별 (X, Y 축 신호 필터링)
+    // □ [1] 좌표 신호 판별
     bool is_coord = (event->code == INPUT_ABS_X || event->code == INPUT_REL_X || 
                      event->code == INPUT_ABS_Y || event->code == INPUT_REL_Y);
 
-    // Sync 신호 등은 시스템 흐름을 위해 무조건 통과 (버벅임 방지)
     if (!is_coord) {
         return ZMK_INPUT_PROC_CONTINUE;
     }
 
     k_work_reschedule(&data->touch_detection.touch_end_timeout_work, K_MSEC(config->touch_detection.wait_for_new_position_ms));
 
-    // □ [2] 원본 데이터 보관 및 출력 신호 변조 준비
-    // - 탭 대기 중이거나 써클 스크롤 작동 중이면 커서 고정 모드 활성화
-    bool should_suppress = (data->tap_detection.is_waiting_for_tap && config->tap_detection.prevent_movement_during_tap) ||
-                           (data->circular_scroll.is_tracking);
-
+    // □ [2] 원본 데이터 수집
     if (event->code == INPUT_ABS_X || event->code == INPUT_REL_X) {
         data->touch_detection.x = event->value;
     } else if (event->code == INPUT_ABS_Y || event->code == INPUT_REL_Y) {
         data->touch_detection.y = event->value;
     }
 
-    // □ [3] 핵심: 신호를 차단(STOP)하지 않고 '상대 좌표 0'으로 속여서 전송
-    // - 이렇게 해야 시스템 렉이 없고 써클 스크롤이 좌표를 읽을 수 있습니다.
-    if (should_suppress) {
-        event->type = INPUT_EV_REL; // 강제 상대 좌표 변환
-        event->value = 0;           // 이동량 0으로 고정
-    }
-
     data->touch_detection.complete = !data->touch_detection.complete;
 
-    // □ [4] Y축까지 들어온 한 세트의 패킷 처리
+    // □ [3] 제스처 로직 처리 (데이터 수집 완료 시)
     if (data->touch_detection.complete) {
         uint32_t now = k_uptime_get();
         
-        // 터치 시작 시 좌표 동기화 (커서 점프 현상 원천 차단)
         if (!data->touch_detection.touching) {
             data->touch_detection.previous_x = data->touch_detection.x;
             data->touch_detection.previous_y = data->touch_detection.y;
@@ -72,17 +59,16 @@ int touch_detection_handle_event(const struct device *dev, struct input_event *e
 
         data->touch_detection.last_touch_timestamp = now;
 
-        // 탭 락 해제 임계값 (5유닛 이상 의도적으로 움직이면 락 해제)
+        // 움직임 탈출 조건 (임계값을 10으로 높여 탭 시 움직임을 더 강력하게 억제)
         if (data->tap_detection.is_waiting_for_tap && 
-           (gesture_event.delta_x > 5 || gesture_event.delta_x < -5 || 
-            gesture_event.delta_y > 5 || gesture_event.delta_y < -5)) {
+           (gesture_event.delta_x > 10 || gesture_event.delta_x < -10 || 
+            gesture_event.delta_y > 10 || gesture_event.delta_y < -10)) {
             data->tap_detection.is_waiting_for_tap = false;
         }
 
-        // 제스처 엔진 실행 (써클 스크롤은 여기서 좌표를 읽어 스크롤 신호를 생성함)
         if (!data->touch_detection.touching){
             data->touch_detection.touching = true;
-            // 오토 레이어 활성화 체크
+            // 오토 레이어 로직
             if (config->tap_detection.touch_layer >= 0) {
                 bool scroller_active = false;
                 for (int i = 0; i < config->tap_detection.ignore_layers_len; i++) {
@@ -104,6 +90,15 @@ int touch_detection_handle_event(const struct device *dev, struct input_event *e
         data->touch_detection.previous_y = data->touch_detection.y;
     }
 
+    // □ [4] 최종 출력 변조 (탭 대기 중이거나 스크롤 중이면 커서 고정)
+    bool should_suppress = (data->tap_detection.is_waiting_for_tap && config->tap_detection.prevent_movement_during_tap) ||
+                           (data->circular_scroll.is_tracking);
+
+    if (should_suppress) {
+        event->type = INPUT_EV_REL; // 강제 상대 좌표 변환 (0점 점프 방지)
+        event->value = 0;           // 이동량 0 고정
+    }
+
     return ZMK_INPUT_PROC_CONTINUE;
 }
 
@@ -115,4 +110,17 @@ void touch_end_timeout_callback(struct k_work *work) {
     
     data->touching = false;
     if (data->auto_layer_active) {
-        zmk_keymap_layer
+        zmk_keymap_layer_deactivate((uint8_t)config->tap_detection.touch_layer);
+        data->auto_layer_active = false;
+    }
+    data->complete = true;
+    config->handle_touch_end(dev);
+}
+
+int touch_detection_init(const struct device *dev) {
+    struct gesture_data *data = (struct gesture_data *)dev->data;
+    data->touch_detection.last_touch_timestamp = k_uptime_get();
+    data->touch_detection.complete = true;
+    k_work_init_delayable(&data->touch_detection.touch_end_timeout_work, touch_end_timeout_callback);
+    return 0;
+}

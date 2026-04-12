@@ -16,14 +16,11 @@ int touch_detection_handle_event(const struct device *dev, struct input_event *e
     struct gesture_config *config = (struct gesture_config *)dev->config;
     struct gesture_data *data = (struct gesture_data *)dev->data;
     
-    // [1] 좌표 신호 여부 확인
+    // [1] 좌표 신호 판별 (Sync는 통과시켜야 버벅임이 없습니다)
     bool is_coord = (event->code == INPUT_ABS_X || event->code == INPUT_REL_X || 
                      event->code == INPUT_ABS_Y || event->code == INPUT_REL_Y);
 
-    // [2] 버벅임 방지: 탭 대기 중엔 Sync 신호를 포함한 모든 신호 전송 차단
-    if (data->tap_detection.is_waiting_for_tap && config->tap_detection.prevent_movement_during_tap) {
-        // 내부 좌표 정보는 계속 업데이트해야 하므로 아래 로직으로 이어짐
-    } else if (!is_coord) {
+    if (!is_coord) {
         return ZMK_INPUT_PROC_CONTINUE;
     }
 
@@ -33,7 +30,7 @@ int touch_detection_handle_event(const struct device *dev, struct input_event *e
         return ZMK_INPUT_PROC_CONTINUE;
     }
 
-    // [3] 좌표 수집 로직
+    // [2] 좌표 수집 및 타입 체크
     data->touch_detection.complete = !data->touch_detection.complete;
     if (data->touch_detection.complete && data->touch_detection.absolute != (event->type == INPUT_EV_ABS)) {
         data->touch_detection.absolute = (event->type == INPUT_EV_ABS);
@@ -45,24 +42,19 @@ int touch_detection_handle_event(const struct device *dev, struct input_event *e
         data->touch_detection.y = event->value;
     }
 
-    // X축 수집 단계면 여기서 일단 멈춤
+    // X축만 들어온 상태라면 Y축을 기다림
     if (! data->touch_detection.complete) {
         data->touch_detection.previous_event = event;
-        if (data->tap_detection.is_waiting_for_tap && config->tap_detection.prevent_movement_during_tap) {
-            return ZMK_INPUT_PROC_STOP;
-        }
         return ZMK_INPUT_PROC_CONTINUE;
     }
 
-    // [4] Y축까지 들어온 시점의 처리
-    uint32_t now = k_uptime_get();
-    
-    // 탭 대기 중일 때는 이전 좌표를 현재 좌표와 일치시켜 delta를 0으로 고정 (커서 튀기 방지 핵심)
-    if (data->tap_detection.is_waiting_for_tap) {
+    // [3] 새로운 터치가 시작될 때 좌표 동기화 (커서 튀기 방지 핵심)
+    if (!data->touch_detection.touching) {
         data->touch_detection.previous_x = data->touch_detection.x;
         data->touch_detection.previous_y = data->touch_detection.y;
     }
 
+    uint32_t now = k_uptime_get();
     struct gesture_event_t gesture_event = {
         .last_touch_timestamp = now,
         .previous_touch_timestamp = data->touch_detection.last_touch_timestamp,
@@ -80,19 +72,18 @@ int touch_detection_handle_event(const struct device *dev, struct input_event *e
 
     data->touch_detection.last_touch_timestamp = now;
 
-    // [5] 탭 탈출 조건 (임계값 10유닛으로 상향 - 확실한 고정)
-    if (data->tap_detection.is_waiting_for_tap) {
-        int dx = data->touch_detection.x - data->touch_detection.previous_x;
-        int dy = data->touch_detection.y - data->touch_detection.previous_y;
-        if (dx > 10 || dx < -10 || dy > 10 || dy < -10) {
-            data->tap_detection.is_waiting_for_tap = false;
-        }
+    // [4] 움직임 감지 시 탭 대기 즉시 해제
+    if (data->tap_detection.is_waiting_for_tap && 
+       (gesture_event.delta_x > 5 || gesture_event.delta_x < -5 || 
+        gesture_event.delta_y > 5 || gesture_event.delta_y < -5)) {
+        data->tap_detection.is_waiting_for_tap = false;
     }
 
+    // [5] 오토 레이어 및 터치 처리
     if (!data->touch_detection.touching){
         data->touch_detection.touching = true;
         
-        // [기능] ignore_layers 체크 후 오토 레이어 활성화
+        // ignore_layers 체크 후 레이어 활성화
         if (config->tap_detection.touch_layer >= 0) {
             bool scroller_active = false;
             for (int i = 0; i < config->tap_detection.ignore_layers_len; i++) {
@@ -114,7 +105,7 @@ int touch_detection_handle_event(const struct device *dev, struct input_event *e
     data->touch_detection.previous_x = data->touch_detection.x;
     data->touch_detection.previous_y = data->touch_detection.y;
 
-    // [6] 최종 전송 결정
+    // [6] 최종 전송 차단 (탭 대기 중일 때만 좌표 전송 중단)
     if (data->tap_detection.is_waiting_for_tap && config->tap_detection.prevent_movement_during_tap) {
         return ZMK_INPUT_PROC_STOP;
     }

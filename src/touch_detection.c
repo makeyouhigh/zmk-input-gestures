@@ -16,17 +16,21 @@ int touch_detection_handle_event(const struct device *dev, struct input_event *e
     struct gesture_config *config = (struct gesture_config *)dev->config;
     struct gesture_data *data = (struct gesture_data *)dev->data;
     
-    // □ [1] 좌표 신호 판별 (X, Y 축 신호 필터링)
+    // □ [1] 좌표 신호 판별
     bool is_coord = (event->code == INPUT_ABS_X || event->code == INPUT_REL_X || 
                      event->code == INPUT_ABS_Y || event->code == INPUT_REL_Y);
 
     if (!is_coord) {
-        return ZMK_INPUT_PROC_CONTINUE;
+        return ZMK_INPUT_PROC_CONTINUE; // Sync 신호는 무조건 통과 (버벅임 방지)
     }
 
     k_work_reschedule(&data->touch_detection.touch_end_timeout_work, K_MSEC(config->touch_detection.wait_for_new_position_ms));
 
-    // □ [2] 원본 데이터 수집 (변조 전의 순수 좌표를 먼저 저장)
+    // □ [2] 핵심: 함수 진입 시점의 억제 상태를 고정 (X와 Y가 동일한 처리를 받도록 동기화)
+    bool should_suppress = (data->tap_detection.is_waiting_for_tap && config->tap_detection.prevent_movement_during_tap) ||
+                           (data->circular_scroll.is_tracking);
+
+    // □ [3] 원본 데이터 수집
     if (event->code == INPUT_ABS_X || event->code == INPUT_REL_X) {
         data->touch_detection.x = event->value;
     } else if (event->code == INPUT_ABS_Y || event->code == INPUT_REL_Y) {
@@ -35,11 +39,11 @@ int touch_detection_handle_event(const struct device *dev, struct input_event *e
 
     data->touch_detection.complete = !data->touch_detection.complete;
 
-    // □ [3] 제스처 로직 처리 (내부 계산에는 원본 좌표 사용)
+    // □ [4] 제스처 로직 처리 (데이터 수집 완료 시)
     if (data->touch_detection.complete) {
         uint32_t now = k_uptime_get();
         
-        // 터치 시작 시 기준점 동기화 (커서 점프 방지)
+        // 터치 시작 시 좌표 동기화 (순간 이동 방지)
         if (!data->touch_detection.touching) {
             data->touch_detection.previous_x = data->touch_detection.x;
             data->touch_detection.previous_y = data->touch_detection.y;
@@ -60,7 +64,7 @@ int touch_detection_handle_event(const struct device *dev, struct input_event *e
 
         data->touch_detection.last_touch_timestamp = now;
 
-        // 탭 대기 락 해제 체크 (임계값 10)
+        // 움직임 탈출 조건 (10유닛 이상 시 탭 락 해제)
         if (data->tap_detection.is_waiting_for_tap && 
            (gesture_event.delta_x > 10 || gesture_event.delta_x < -10 || 
             gesture_event.delta_y > 10 || gesture_event.delta_y < -10)) {
@@ -69,6 +73,7 @@ int touch_detection_handle_event(const struct device *dev, struct input_event *e
 
         if (!data->touch_detection.touching){
             data->touch_detection.touching = true;
+            // 오토 레이어 로직
             if (config->tap_detection.touch_layer >= 0) {
                 bool scroller_active = false;
                 for (int i = 0; i < config->tap_detection.ignore_layers_len; i++) {
@@ -83,7 +88,7 @@ int touch_detection_handle_event(const struct device *dev, struct input_event *e
             }
             config->handle_touch_start(dev, &gesture_event);
         } else {
-            // [핵심] 여기서 써클 스크롤 신호를 원본 좌표로 계산합니다.
+            // 써클 스크롤 신호는 정상적으로 처리됨
             config->handle_touch_continue(dev, &gesture_event);
         }
 
@@ -91,12 +96,9 @@ int touch_detection_handle_event(const struct device *dev, struct input_event *e
         data->touch_detection.previous_y = data->touch_detection.y;
     }
 
-    // □ [4] 최종 출력 변조 (컴퓨터로 나가는 신호만 속이기)
-    // - 탭 대기 중일 때만 마우스 커서를 고정합니다.
-    // - 써클 스크롤 중일 때는 드라이버 자체 로직이 신호를 처리하도록 방해하지 않습니다.
-    if (data->tap_detection.is_waiting_for_tap && config->tap_detection.prevent_movement_during_tap) {
-        event->type = INPUT_EV_REL; // 상대 좌표로 강제 변환
-        event->value = 0;           // 이동량 0으로 고정
+    // □ [5] 최종 출력: 억제 상태면 깔끔하게 STOP (데이터 오염 없음)
+    if (should_suppress) {
+        return ZMK_INPUT_PROC_STOP;
     }
 
     return ZMK_INPUT_PROC_CONTINUE;

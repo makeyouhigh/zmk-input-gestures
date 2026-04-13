@@ -44,9 +44,11 @@ int touch_detection_handle_event(const struct device *dev, struct input_event *e
     if (! data->touch_detection.complete) {
         data->touch_detection.previous_event = event;
 
-        // [핵심 수정 포인트] 스크롤 중이거나 탭 대기 중일 때 첫 번째 이벤트(X축)를 0으로 변환
+        // [핵심 해결] 스크롤 중, 탭 대기 중, 혹은 '완전히 새로운 터치의 첫 신호'일 때 억제
+        bool is_new_touch = !data->touch_detection.touching;
         bool should_suppress_first_event = data->circular_scroll.is_tracking || 
-                                           (data->tap_detection.is_waiting_for_tap && config->tap_detection.prevent_movement_during_tap);
+                                           (data->tap_detection.is_waiting_for_tap && config->tap_detection.prevent_movement_during_tap) ||
+                                           is_new_touch;
 
         if (should_suppress_first_event) {
             if (event->code == INPUT_ABS_X || event->code == INPUT_REL_X) {
@@ -82,7 +84,7 @@ int touch_detection_handle_event(const struct device *dev, struct input_event *e
     if (!data->touch_detection.touching){
         data->touch_detection.touching = true;
         
-        // [오토 레이어 추가] 터치 시작 시 레이어 활성화
+        // 오토 레이어 활성화
         if (config->tap_detection.touch_layer >= 0) {
             bool scroller_active = false;
             for (int i = 0; i < config->tap_detection.ignore_layers_len; i++) {
@@ -115,7 +117,7 @@ void touch_end_timeout_callback(struct k_work *work) {
     
     data->touching = false;
     
-    // [오토 레이어 추가] 터치 종료 시 레이어 비활성화
+    // 오토 레이어 비활성화
     if (data->auto_layer_active) {
         zmk_keymap_layer_deactivate((uint8_t)config->tap_detection.touch_layer);
         data->auto_layer_active = false;
